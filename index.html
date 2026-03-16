@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>GPS Asset Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.2.6/dist/quagga.min.js"></script>
+
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --surface: #ffffff;
+    --surface2: #f0f2f6;
+    --border: #dde1ea;
+    --accent: #2563eb;
+    --accent2: #059669;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --text: #111827;
+    --text2: #6b7280;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 15px;
+  }
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-icon {
+    width: 34px; height: 34px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .logo h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+  .asset-count {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 13px;
+    color: var(--text2);
+  }
+  .asset-count span { color: var(--accent); font-weight: 600; }
+
+  .tabs {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    overflow-x: auto;
+  }
+  .tab {
+    padding: 12px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text2);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: all 0.2s;
+    user-select: none;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab:hover:not(.active) { color: var(--text); }
+
+  .page { display: none; padding: 20px; max-width: 900px; margin: 0 auto; }
+  .page.active { display: block; }
+
+  /* Scanner */
+  #scanner-wrap {
+    position: relative;
+    background: #000;
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 2px solid var(--border);
+    width: 100%;
+    aspect-ratio: 4/3;
+  }
+  #scanner-video {
+    width: 100%; height: 100%;
+    object-fit: cover; display: block;
+  }
+  /* overlay shown before camera starts */
+  #scanner-placeholder {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px; background: var(--surface2);
+  }
+  #scanner-placeholder .ph-icon { font-size: 56px; }
+  #scanner-placeholder p { color: var(--text2); font-size: 14px; text-align: center; padding: 0 20px; }
+  /* scan overlay on top of video */
+  #scan-overlay {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    display: none;
+  }
+  /* Quagga renders a video + drawing canvas into #quagga-viewport */
+  #quagga-viewport { width: 100%; height: 100%; }
+  #quagga-viewport video { width: 100% !important; height: 100% !important; object-fit: cover; display: block; }
+  #quagga-viewport canvas { display: none !important; } /* hide Quagga's own overlay canvas */
+  /* dark mask with transparent centre slit */
+  .scan-mask-top, .scan-mask-bottom, .scan-mask-left, .scan-mask-right {
+    position: absolute; background: rgba(0,0,0,0.5);
+  }
+  .scan-mask-top    { top: 0; left: 0; right: 0; height: 32.5%; }
+  .scan-mask-bottom { bottom: 0; left: 0; right: 0; height: 32.5%; }
+  .scan-mask-left   { top: 32.5%; bottom: 32.5%; left: 0; width: 5%; }
+  .scan-mask-right  { top: 32.5%; bottom: 32.5%; right: 0; width: 5%; }
+  /* corner brackets */
+  .sc { position: absolute; width: 24px; height: 24px; border-color: var(--accent); border-style: solid; }
+  .sc-tl { top: 32.5%; left: 5%;  border-width: 3px 0 0 3px; border-radius: 3px 0 0 0; }
+  .sc-tr { top: 32.5%; right: 5%; border-width: 3px 3px 0 0; border-radius: 0 3px 0 0; }
+  .sc-bl { bottom: 32.5%; left: 5%;  border-width: 0 0 3px 3px; border-radius: 0 0 0 3px; }
+  .sc-br { bottom: 32.5%; right: 5%; border-width: 0 3px 3px 0; border-radius: 0 0 3px 0; }
+  /* animated scan line */
+  #scan-line {
+    position: absolute;
+    left: 6%; right: 6%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), var(--accent), transparent);
+    box-shadow: 0 0 6px var(--accent);
+    top: 32.5%;
+    animation: scanBeam 1.6s ease-in-out infinite;
+  }
+  @keyframes scanBeam {
+    0%   { top: 33%; }
+    50%  { top: 66%; }
+    100% { top: 33%; }
+  }
+
+  .scanner-status {
+    text-align: center;
+    padding: 10px 8px;
+    font-size: 14px;
+    color: var(--text2);
+    min-height: 38px;
+    line-height: 1.4;
+  }
+  .scanner-status.scanning { color: var(--accent); }
+  .scanner-status.found    { color: var(--accent2); font-weight: 600; }
+  .scanner-status.error    { color: var(--danger); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 11px 20px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s; font-family: inherit;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #2563eb; }
+  .btn-success { background: var(--accent2); color: #fff; }
+  .btn-success:hover { background: #059669; }
+  .btn-danger  { background: var(--danger);  color: #fff; }
+  .btn-danger:hover  { background: #dc2626; }
+  .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--border); }
+  .btn-sm   { padding: 7px 13px; font-size: 13px; }
+  .btn-full { width: 100%; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  .card-title { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 14px; }
+
+  .form-row { margin-bottom: 14px; }
+  .form-label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+  .form-control {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); padding: 10px 14px;
+    font-size: 15px; font-family: inherit; transition: border-color 0.2s;
+  }
+  .form-control:focus { outline: none; border-color: var(--accent); }
+  .form-control::placeholder { color: var(--text2); }
+  select.form-control {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238891b0' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px;
+  }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .badge { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .badge-green { background: rgba(16,185,129,0.2); color: var(--accent2); }
+  .badge-warn  { background: rgba(245,158,11,0.2);  color: var(--warn); }
+
+  .search-bar { display: flex; gap: 10px; margin-bottom: 14px; }
+  .filter-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .filter-chip {
+    padding: 5px 12px; border-radius: 20px; background: var(--surface2);
+    border: 1px solid var(--border); font-size: 13px; color: var(--text2);
+    cursor: pointer; transition: all 0.15s; user-select: none;
+  }
+  .filter-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
+  .asset-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .asset-table th {
+    text-align: left; padding: 10px 12px; font-size: 12px; font-weight: 600;
+    color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border); white-space: nowrap; cursor: pointer;
+  }
+  .asset-table th:hover { color: var(--text); }
+  .asset-table td { padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .asset-table tr:last-child td { border-bottom: none; }
+  .asset-table tr.clickable:hover td { background: rgba(255,255,255,0.03); cursor: pointer; }
+  .no-results { text-align: center; padding: 40px 20px; color: var(--text2); }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: var(--radius);
+    padding: 48px 24px; text-align: center; cursor: pointer;
+    transition: all 0.2s; background: var(--surface);
+  }
+  .dropzone:hover, .dropzone.dragover { border-color: var(--accent); background: rgba(59,130,246,0.07); }
+  .dropzone-icon { font-size: 48px; margin-bottom: 14px; }
+  .dropzone h3 { font-size: 17px; margin-bottom: 6px; }
+  .dropzone p { color: var(--text2); font-size: 14px; }
+
+  .col-map-row { display: grid; grid-template-columns: 1fr 28px 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .col-map-arrow { color: var(--text2); font-size: 16px; text-align: center; }
+  .col-map-label { font-size: 14px; font-weight: 500; }
+
+  .alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 14px; font-size: 14px; }
+  .alert-success { background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.3); color: var(--accent2); }
+  .alert-warn    { background: rgba(245,158,11,0.15);  border: 1px solid rgba(245,158,11,0.3);  color: var(--warn); }
+  .alert-error   { background: rgba(239,68,68,0.15);   border: 1px solid rgba(239,68,68,0.3);   color: var(--danger); }
+
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    display: flex; align-items: flex-end; justify-content: center;
+    z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .modal-bg.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px 18px 0 0; padding: 20px;
+    width: 100%; max-width: 640px; max-height: 92vh; overflow-y: auto;
+    transform: translateY(40px); transition: transform 0.25s;
+  }
+  .modal-bg.open .modal { transform: translateY(0); }
+  .modal-handle { width: 40px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 18px; }
+  .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 18px; }
+
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .detail-item label { display: block; font-size: 11px; color: var(--text2); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+  .detail-item span { font-size: 15px; }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; text-align: center; }
+  .stat-value { font-size: 28px; font-weight: 800; color: var(--accent); }
+  .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+  .manual-row { display: flex; gap: 8px; margin-top: 14px; }
+
+  @media (min-width: 640px) {
+    .page { padding: 28px; }
+    .modal-bg { align-items: center; }
+    .modal { border-radius: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">📱</div>
+    <h1>GPS Asset Tracker</h1>
+  </div>
+  <div class="asset-count"><span id="asset-count-num">0</span> assets</div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" data-tab="scan">📷 Scan</div>
+  <div class="tab" data-tab="assets">📋 Assets</div>
+  <div class="tab" data-tab="import">📤 Import</div>
+  <div class="tab" data-tab="export">📥 Export</div>
+</div>
+
+<!-- SCAN PAGE -->
+<div class="page active" id="tab-scan">
+  <div id="scanner-wrap">
+    <!-- Quagga renders its video+canvas into #quagga-viewport -->
+    <div id="quagga-viewport"></div>
+
+    <!-- Placeholder shown before camera starts -->
+    <div id="scanner-placeholder">
+      <div class="ph-icon">📷</div>
+      <p>Tap the button below to start the camera and scan a barcode</p>
+      <button class="btn btn-primary" id="start-scan-btn">▶ Start Scanning</button>
+    </div>
+
+    <!-- Visual overlay on top of live video -->
+    <div id="scan-overlay">
+      <div class="scan-mask-top"></div>
+      <div class="scan-mask-bottom"></div>
+      <div class="scan-mask-left"></div>
+      <div class="scan-mask-right"></div>
+      <div class="sc sc-tl"></div>
+      <div class="sc sc-tr"></div>
+      <div class="sc sc-bl"></div>
+      <div class="sc sc-br"></div>
+      <div id="scan-line"></div>
+    </div>
+  </div>
+
+  <p class="scanner-status" id="scan-status"></p>
+
+  <div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap;">
+    <button class="btn btn-ghost" id="stop-scan-btn" style="display:none">⏹ Stop Camera</button>
+  </div>
+
+  <div class="manual-row">
+    <input type="text" id="manual-barcode" class="form-control" placeholder="Or type / paste barcode here">
+    <button class="btn btn-ghost" id="manual-search-btn">Search</button>
+  </div>
+</div>
+
+<!-- ASSETS PAGE -->
+<div class="page" id="tab-assets">
+  <div class="stats-grid" id="stats-grid"></div>
+  <div class="search-bar">
+    <input type="text" id="search-input" class="form-control" placeholder="🔍  Search barcode, make, model, location…">
+    <button class="btn btn-ghost btn-sm" id="clear-search-btn">Clear</button>
+  </div>
+  <div class="filter-row" id="type-filters"></div>
+  <div class="table-wrap">
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th data-sort="barcode">Barcode</th>
+          <th data-sort="equipmentNumber">Equip. No.</th>
+          <th data-sort="description">Description</th>
+          <th data-sort="make">Make</th>
+          <th data-sort="model">Model</th>
+          <th data-sort="location">Location</th>
+          <th data-sort="room">Room</th>
+          <th data-sort="stockTakeDate">Stock Take</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="asset-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- IMPORT PAGE -->
+<div class="page" id="tab-import">
+  <div class="card">
+    <div class="card-title">Upload Asset File</div>
+    <p style="color:var(--text2);font-size:14px;margin-bottom:16px;">Upload a CSV or Excel file. After upload, map your columns to the required fields.</p>
+    <div class="dropzone" id="dropzone">
+      <div class="dropzone-icon">📂</div>
+      <h3>Drop file here or tap to browse</h3>
+      <p>Supports .csv, .xlsx, .xls</p>
+    </div>
+    <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display:none">
+  </div>
+  <div id="import-mapper" style="display:none">
+    <div class="card">
+      <div class="card-title">Map Your Columns</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">Match each field to a column from your file. Barcode is required.</p>
+      <div id="mapper-rows"></div>
+      <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
+        <button class="btn btn-primary" id="do-import-btn">✅ Import Data</button>
+        <button class="btn btn-ghost" id="cancel-import-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <div id="import-alert"></div>
+  <div class="card">
+    <div class="card-title">Expected Columns</div>
+    <p style="color:var(--text2);font-size:13px;line-height:1.7;">
+      Your file should contain: <strong>Bar-Code Number</strong> (required), Equipment Number, Description, Serial Number, Make/Manufacturer, Model Number, Location, Room, Stock Take Date, Last Seen Year, Last Seen Month.<br>
+      Column names don't need to match exactly — you map them after upload.
+    </p>
+  </div>
+</div>
+
+<!-- EXPORT PAGE -->
+<div class="page" id="tab-export">
+  <div class="card">
+    <div class="card-title">Export Asset Data</div>
+    <p style="color:var(--text2);font-size:14px;margin-bottom:18px;">Download all records as a spreadsheet, including all scan updates.</p>
+    <div class="form-row">
+      <label class="form-label">Format</label>
+      <select id="export-format" class="form-control">
+        <option value="xlsx">Excel (.xlsx)</option>
+        <option value="csv">CSV (.csv)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Filter by Location (optional)</label>
+      <input type="text" id="export-type-filter" class="form-control" placeholder="e.g. 4320B00D">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Only stock-taken on or after (optional)</label>
+      <input type="date" id="export-date-filter" class="form-control">
+    </div>
+    <button class="btn btn-success btn-full" id="do-export-btn">⬇️  Download Export</button>
+  </div>
+  <div class="card">
+    <div class="card-title">Danger Zone</div>
+    <p style="color:var(--text2);font-size:13px;margin-bottom:14px;">Clears all asset data from this device. Export first!</p>
+    <button class="btn btn-danger" id="clear-data-btn">🗑️ Clear All Data</button>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-bg" id="asset-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script>
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const STORAGE_KEY  = 'asset_tracker_v4';
+const FIELDS = [
+  { key: 'barcode',         label: 'Bar-Code Number *' },
+  { key: 'equipmentNumber', label: 'Equipment Number' },
+  { key: 'description',     label: 'Description' },
+  { key: 'serialNumber',    label: 'Serial Number' },
+  { key: 'make',            label: 'Make/Manufacturer' },
+  { key: 'model',           label: 'Model Number' },
+  { key: 'location',        label: 'Location' },
+  { key: 'room',            label: 'Room' },
+  { key: 'stockTakeDate',   label: 'Stock Take Date' },
+  { key: 'lastSeenYear',    label: 'Last Seen Year' },
+  { key: 'lastSeenMonth',   label: 'Last Seen Month' },
+];
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let assets          = [];
+let sortKey         = 'barcode';
+let sortDir         = 1;
+let activeTypeFilter = '';
+let importColumns   = [];
+let importRows      = [];
+let scannerRunning  = false;
+let lastScanned     = '';
+let lastScannedTime = 0;
+
+// ─── STORAGE ─────────────────────────────────────────────────────────────────
+function saveAssets() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(assets)); } catch(e) {}
+  document.getElementById('asset-count-num').textContent = assets.length;
+}
+function loadAssets() {
+  try { assets = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { assets = []; }
+  document.getElementById('asset-count-num').textContent = assets.length;
+}
+
+// ─── TABS ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'scan') {
+      // Don't auto-start — user taps the button
+    } else {
+      stopScanner();
+      if (tab.dataset.tab === 'assets') { renderStats(); buildTypeFilters(); renderTable(); }
+    }
+  });
+});
+
+// ─── SCANNER (Quagga2 — works on iOS Safari + Chrome desktop) ────────────────
+function setStatus(msg, cls) {
+  const el = document.getElementById('scan-status');
+  el.textContent = msg;
+  el.className = 'scanner-status ' + (cls || '');
+}
+
+function startScanner() {
+  if (scannerRunning) return;
+
+  const placeholder = document.getElementById('scanner-placeholder');
+  const overlay     = document.getElementById('scan-overlay');
+  const stopBtn     = document.getElementById('stop-scan-btn');
+
+  setStatus('Starting camera…', 'scanning');
+
+  Quagga.init({
+    inputStream: {
+      name: 'Live',
+      type: 'LiveStream',
+      target: document.getElementById('quagga-viewport'),
+      constraints: {
+        facingMode: 'environment',   // back camera on phones
+        width:  { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    },
+    decoder: {
+      readers: [
+        'code_128_reader',
+        'code_39_reader',
+        'code_93_reader',
+        'codabar_reader',
+        'ean_reader',
+        'ean_8_reader',
+        'upc_reader',
+        'upc_e_reader',
+        'i2of5_reader',
+      ],
+      // Try multiple orientations — essential for 1D barcodes held at angle
+      multiple: false,
+    },
+    locate: true,
+    frequency: 10,   // decode attempts per second
+    numOfWorkers: 0, // must be 0 for iOS (no SharedArrayBuffer)
+  }, function(err) {
+    if (err) {
+      console.error('Quagga init error:', err);
+      const msg = (err.message || String(err)).toLowerCase();
+      if (msg.includes('permission') || msg.includes('denied') || msg.includes('notallowed')) {
+        setStatus('⚠️ Camera permission denied. In Safari go to Settings → Safari → Camera → Allow, then reload.', 'error');
+      } else if (msg.includes('notfound') || msg.includes('no camera')) {
+        setStatus('⚠️ No camera found on this device.', 'error');
+      } else {
+        setStatus('⚠️ Camera error: ' + (err.message || err), 'error');
+      }
+      return;
+    }
+
+    Quagga.start();
+    scannerRunning = true;
+    placeholder.style.display = 'none';
+    overlay.classList.add('active');
+    stopBtn.style.display = 'inline-flex';
+    setStatus('📷 Hold barcode steady in the blue zone…', 'scanning');
+  });
+
+  Quagga.onDetected(function(result) {
+    const code = result && result.codeResult && result.codeResult.code;
+    if (!code) return;
+    const now = Date.now();
+    if (code === lastScanned && now - lastScannedTime < 3000) return;
+    lastScanned     = code;
+    lastScannedTime = now;
+    setStatus('✅ Scanned: ' + code, 'found');
+    setTimeout(() => {
+      if (scannerRunning) setStatus('📷 Hold barcode steady in the blue zone…', 'scanning');
+    }, 2000);
+    lookupBarcode(code);
+  });
+}
+
+function stopScanner() {
+  if (!scannerRunning) return;
+  Quagga.stop();
+  scannerRunning = false;
+
+  const placeholder = document.getElementById('scanner-placeholder');
+  const overlay     = document.getElementById('scan-overlay');
+  const stopBtn     = document.getElementById('stop-scan-btn');
+  // Clear out Quagga's injected elements so it starts fresh next time
+  const vp = document.getElementById('quagga-viewport');
+  vp.innerHTML = '';
+
+  overlay.classList.remove('active');
+  placeholder.style.display = '';
+  stopBtn.style.display = 'none';
+  setStatus('', '');
+}
+
+document.getElementById('start-scan-btn').addEventListener('click', startScanner);
+document.getElementById('stop-scan-btn').addEventListener('click',  stopScanner);
+
+// ─── BARCODE LOOKUP ───────────────────────────────────────────────────────────
+function lookupBarcode(code) {
+  code = (code || '').trim();
+  if (!code) return;
+  const idx = assets.findIndex(a => a.barcode && a.barcode.toLowerCase() === code.toLowerCase());
+  if (idx !== -1) showAssetModal(idx);
+  else showNewAssetModal(code);
+}
+
+// ─── MODAL HELPERS ────────────────────────────────────────────────────────────
+function openModal()  { document.getElementById('asset-modal').classList.add('open'); }
+function closeModal() { document.getElementById('asset-modal').classList.remove('open'); }
+document.getElementById('asset-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('asset-modal')) closeModal();
+});
+
+// ─── ASSET VIEW MODAL ────────────────────────────────────────────────────────
+function showAssetModal(idx) {
+  const asset = assets[idx];
+  if (!asset) return;
+  const today   = todayStr();
+  const isToday = asset.stockTakeDate === today;
+
+  document.getElementById('modal-content').innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+      <span style="font-size:36px">📦</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:17px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${esc(asset.description) || esc(asset.make) + ' ' + esc(asset.model)}
+        </div>
+        <div style="color:var(--text2);font-size:13px">${esc(asset.barcode)}</div>
+      </div>
+      ${isToday ? '<span class="badge badge-green">✓ Sighted today</span>' : ''}
+    </div>
+    <div class="detail-grid">
+      <div class="detail-item"><label>Equipment No.</label><span>${esc(asset.equipmentNumber)||'—'}</span></div>
+      <div class="detail-item"><label>Description</label><span>${esc(asset.description)||'—'}</span></div>
+      <div class="detail-item"><label>Serial Number</label><span>${esc(asset.serialNumber)||'—'}</span></div>
+      <div class="detail-item"><label>Make</label><span>${esc(asset.make)||'—'}</span></div>
+      <div class="detail-item"><label>Model</label><span>${esc(asset.model)||'—'}</span></div>
+      <div class="detail-item"><label>Location</label><span>${esc(asset.location)||'—'}</span></div>
+      <div class="detail-item"><label>Room</label><span>${esc(asset.room)||'—'}</span></div>
+      <div class="detail-item"><label>Stock Take Date</label><span>${esc(asset.stockTakeDate)||'—'}</span></div>
+      <div class="detail-item"><label>Last Seen Year</label><span>${esc(String(asset.lastSeenYear||''))||'—'}</span></div>
+      <div class="detail-item"><label>Last Seen Month</label><span>${esc(String(asset.lastSeenMonth||''))||'—'}</span></div>
+    </div>
+    <div class="card" style="background:var(--surface2);margin-bottom:0">
+      <div class="card-title">Update Sighting</div>
+      <div class="two-col">
+        <div class="form-row">
+          <label class="form-label">Location</label>
+          <input type="text" id="update-location" class="form-control" placeholder="e.g. 4320B00D" value="${esc(asset.location)}">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Room</label>
+          <input type="text" id="update-room" class="form-control" placeholder="e.g. DR0002" value="${esc(asset.room)}">
+        </div>
+      </div>
+      <div class="form-row" style="margin-bottom:0">
+        <label class="form-label">Stock Take Date</label>
+        <input type="date" id="update-date" class="form-control" value="${asset.stockTakeDate || today}">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+      <button class="btn btn-success" id="confirm-btn">✅ Confirm Sighting</button>
+      <button class="btn btn-ghost btn-sm" id="edit-btn">✏️ Edit Details</button>
+      <button class="btn btn-ghost btn-sm" id="close-modal-btn">Close</button>
+    </div>
+  `;
+  document.getElementById('confirm-btn').onclick     = () => confirmSighting(asset.barcode);
+  document.getElementById('edit-btn').onclick        = () => showEditModal(asset.barcode);
+  document.getElementById('close-modal-btn').onclick = closeModal;
+  openModal();
+}
+
+function confirmSighting(barcode) {
+  const idx = assets.findIndex(a => a.barcode === barcode);
+  if (idx === -1) return;
+  const location = document.getElementById('update-location').value.trim();
+  const room     = document.getElementById('update-room').value.trim();
+  assets[idx].location      = location;
+  assets[idx].room          = room;
+  assets[idx].stockTakeDate = document.getElementById('update-date').value;
+  const yr = new Date().getFullYear();
+  const mo = new Date().getMonth() + 1;
+  assets[idx].lastSeenYear  = yr;
+  assets[idx].lastSeenMonth = mo;
+  saveAssets();
+  closeModal();
+  showToast('✅ ' + barcode + ' sighted at ' + (location || room));
+}
+
+// ─── NEW ASSET MODAL ──────────────────────────────────────────────────────────
+function showNewAssetModal(barcode) {
+  document.getElementById('modal-content').innerHTML = `
+    <div class="modal-title">⚠️ Unknown Barcode</div>
+    <div class="alert alert-warn">Barcode <strong>${esc(barcode)}</strong> not found. Add it as a new asset?</div>
+    <div class="two-col">
+      <div class="form-row">
+        <label class="form-label">Bar-Code Number</label>
+        <input type="text" id="new-barcode" class="form-control" value="${esc(barcode)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Equipment Number</label>
+        <input type="text" id="new-equipmentNumber" class="form-control" placeholder="e.g. 900247155">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Description</label>
+        <input type="text" id="new-description" class="form-control" placeholder="e.g. LAPTOP">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Serial Number</label>
+        <input type="text" id="new-serialNumber" class="form-control" placeholder="">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Make/Manufacturer</label>
+        <input type="text" id="new-make" class="form-control" placeholder="e.g. HP">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Model Number</label>
+        <input type="text" id="new-model" class="form-control" placeholder="">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Location</label>
+        <input type="text" id="new-location" class="form-control" placeholder="e.g. 4320B00D">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Room</label>
+        <input type="text" id="new-room" class="form-control" placeholder="e.g. DR0002">
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Stock Take Date</label>
+      <input type="date" id="new-stockTakeDate" class="form-control" value="${todayStr()}">
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="save-new-btn">➕ Save Asset</button>
+      <button class="btn btn-ghost" id="cancel-new-btn">Cancel</button>
+    </div>
+  `;
+  document.getElementById('save-new-btn').onclick   = saveNewAsset;
+  document.getElementById('cancel-new-btn').onclick = closeModal;
+  openModal();
+}
+
+function saveNewAsset() {
+  const barcode = document.getElementById('new-barcode').value.trim();
+  if (!barcode) { alert('Bar-Code Number is required.'); return; }
+  if (assets.find(a => a.barcode === barcode)) { alert('A record with this barcode already exists.'); return; }
+  const now = new Date();
+  assets.push({
+    barcode,
+    equipmentNumber: document.getElementById('new-equipmentNumber').value.trim(),
+    description:     document.getElementById('new-description').value.trim(),
+    serialNumber:    document.getElementById('new-serialNumber').value.trim(),
+    make:            document.getElementById('new-make').value.trim(),
+    model:           document.getElementById('new-model').value.trim(),
+    location:        document.getElementById('new-location').value.trim(),
+    room:            document.getElementById('new-room').value.trim(),
+    stockTakeDate:   document.getElementById('new-stockTakeDate').value,
+    lastSeenYear:    now.getFullYear(),
+    lastSeenMonth:   now.getMonth() + 1,
+  });
+  saveAssets();
+  closeModal();
+  showToast('➕ Asset ' + barcode + ' added');
+}
+
+// ─── EDIT MODAL ───────────────────────────────────────────────────────────────
+function showEditModal(barcode) {
+  const asset = assets.find(a => a.barcode === barcode);
+  if (!asset) return;
+  document.getElementById('modal-content').innerHTML = `
+    <div class="modal-title">✏️ Edit Asset</div>
+    <div class="form-row">
+      <label class="form-label">Bar-Code Number</label>
+      <input type="text" class="form-control" value="${esc(asset.barcode)}" disabled style="opacity:0.5">
+    </div>
+    <div class="two-col">
+      <div class="form-row">
+        <label class="form-label">Equipment Number</label>
+        <input type="text" id="edit-equipmentNumber" class="form-control" value="${esc(asset.equipmentNumber)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Description</label>
+        <input type="text" id="edit-description" class="form-control" value="${esc(asset.description)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Serial Number</label>
+        <input type="text" id="edit-serialNumber" class="form-control" value="${esc(asset.serialNumber)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Make/Manufacturer</label>
+        <input type="text" id="edit-make" class="form-control" value="${esc(asset.make)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Model Number</label>
+        <input type="text" id="edit-model" class="form-control" value="${esc(asset.model)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Location</label>
+        <input type="text" id="edit-location" class="form-control" value="${esc(asset.location)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Room</label>
+        <input type="text" id="edit-room" class="form-control" value="${esc(asset.room)}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Stock Take Date</label>
+        <input type="date" id="edit-stockTakeDate" class="form-control" value="${asset.stockTakeDate||''}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Last Seen Year</label>
+        <input type="number" id="edit-lastSeenYear" class="form-control" value="${asset.lastSeenYear||''}">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Last Seen Month</label>
+        <input type="number" id="edit-lastSeenMonth" class="form-control" min="1" max="12" value="${asset.lastSeenMonth||''}">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="save-edit-btn">💾 Save Changes</button>
+      <button class="btn btn-ghost"   id="back-btn">← Back</button>
+    </div>
+  `;
+  document.getElementById('save-edit-btn').onclick = () => saveEdit(barcode);
+  document.getElementById('back-btn').onclick = () => {
+    const idx = assets.findIndex(a => a.barcode === barcode);
+    if (idx !== -1) showAssetModal(idx); else closeModal();
+  };
+}
+
+function saveEdit(barcode) {
+  const idx = assets.findIndex(a => a.barcode === barcode);
+  if (idx === -1) return;
+  assets[idx].equipmentNumber = document.getElementById('edit-equipmentNumber').value.trim();
+  assets[idx].description     = document.getElementById('edit-description').value.trim();
+  assets[idx].serialNumber    = document.getElementById('edit-serialNumber').value.trim();
+  assets[idx].make            = document.getElementById('edit-make').value.trim();
+  assets[idx].model           = document.getElementById('edit-model').value.trim();
+  assets[idx].location        = document.getElementById('edit-location').value.trim();
+  assets[idx].room            = document.getElementById('edit-room').value.trim();
+  assets[idx].stockTakeDate   = document.getElementById('edit-stockTakeDate').value;
+  assets[idx].lastSeenYear    = parseInt(document.getElementById('edit-lastSeenYear').value) || null;
+  assets[idx].lastSeenMonth   = parseInt(document.getElementById('edit-lastSeenMonth').value) || null;
+  saveAssets();
+  closeModal();
+  showToast('💾 Asset updated');
+}
+
+// ─── ASSETS TABLE ─────────────────────────────────────────────────────────────
+function renderStats() {
+  const today = todayStr();
+  const stockedToday = assets.filter(a => a.stockTakeDate === today).length;
+  const locations = new Set(assets.map(a => a.location).filter(Boolean));
+  const thisYear  = new Date().getFullYear();
+  const seenThisYear = assets.filter(a => a.lastSeenYear === thisYear).length;
+  const html = `
+    <div class="stat-card"><div class="stat-value">${assets.length}</div><div class="stat-label">Total Assets</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--accent2)">${stockedToday}</div><div class="stat-label">Stocked Today</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--warn)">${locations.size}</div><div class="stat-label">Locations</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--accent)">${seenThisYear}</div><div class="stat-label">Seen ${thisYear}</div></div>
+  `;
+  document.getElementById('stats-grid').innerHTML = html;
+}
+
+function buildTypeFilters() {
+  const locations = [...new Set(assets.map(a => a.location).filter(Boolean))].sort();
+  let html = `<div class="filter-chip ${!activeTypeFilter?'active':''}" data-filter="">All Locations</div>`;
+  locations.forEach(loc => {
+    html += `<div class="filter-chip ${activeTypeFilter===loc?'active':''}" data-filter="${esc(loc)}">📍 ${esc(loc)}</div>`;
+  });
+  const el = document.getElementById('type-filters');
+  el.innerHTML = html;
+  el.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      activeTypeFilter = chip.dataset.filter;
+      buildTypeFilters();
+      renderTable();
+    });
+  });
+}
+
+function renderTable() {
+  const q = (document.getElementById('search-input').value || '').toLowerCase();
+  let filtered = assets.filter(a => {
+    if (activeTypeFilter && a.location !== activeTypeFilter) return false;
+    if (!q) return true;
+    return ['barcode','equipmentNumber','description','serialNumber','make','model','location','room'].some(k => (a[k]||'').toLowerCase().includes(q));
+  });
+  filtered.sort((a,b) => {
+    const av = String(a[sortKey]||'').toLowerCase();
+    const bv = String(b[sortKey]||'').toLowerCase();
+    return av < bv ? -sortDir : av > bv ? sortDir : 0;
+  });
+  const today  = todayStr();
+  const tbody  = document.getElementById('asset-tbody');
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="no-results">${assets.length ? 'No assets match your search.' : 'No assets yet — use the Import tab to get started.'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = '';
+  filtered.forEach(a => {
+    const idx     = assets.indexOf(a);
+    const tr      = document.createElement('tr');
+    tr.className  = 'clickable';
+    const isToday = a.stockTakeDate === today;
+    tr.innerHTML  = `
+      <td><code style="font-size:13px">${esc(a.barcode)}</code></td>
+      <td>${esc(a.equipmentNumber)||'—'}</td>
+      <td>${esc(a.description)||'—'}</td>
+      <td>${esc(a.make)||'—'}</td>
+      <td>${esc(a.model)||'—'}</td>
+      <td>${esc(a.location)||'—'}</td>
+      <td>${esc(a.room)||'—'}</td>
+      <td>${isToday ? '<span class="badge badge-green">Today</span>' : (esc(a.stockTakeDate)||'<span style="color:var(--text2)">—</span>')}</td>
+      <td><button class="btn btn-ghost btn-sm">View</button></td>
+    `;
+    tr.addEventListener('click', () => showAssetModal(idx));
+    tbody.appendChild(tr);
+  });
+}
+
+document.querySelectorAll('.asset-table th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = 1; }
+    renderTable();
+  });
+});
+document.getElementById('search-input').addEventListener('input', renderTable);
+document.getElementById('clear-search-btn').addEventListener('click', () => {
+  document.getElementById('search-input').value = '';
+  renderTable();
+});
+
+// ─── IMPORT ───────────────────────────────────────────────────────────────────
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+
+dropzone.addEventListener('click',     () => fileInput.click());
+dropzone.addEventListener('dragover',  e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) processImportFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) processImportFile(fileInput.files[0]); });
+
+function processImportFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      let rows;
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        rows = parseCSV(e.target.result);
+      } else {
+        const wb = XLSX.read(e.target.result, { type: 'binary', cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      }
+      if (!rows.length) { showImportAlert('No data rows found in file.', 'error'); return; }
+      importColumns = Object.keys(rows[0]);
+      importRows    = rows;
+      showColumnMapper();
+    } catch(err) {
+      showImportAlert('Could not read file: ' + err.message, 'error');
+    }
+  };
+  if (file.name.toLowerCase().endsWith('.csv')) reader.readAsText(file);
+  else reader.readAsBinaryString(file);
+}
+
+function parseCSV(text) {
+  const lines = text.split('\n').filter(l => l.trim());
+  if (!lines.length) return [];
+  const headers = splitCSVLine(lines[0]);
+  return lines.slice(1).map(line => {
+    const vals = splitCSVLine(line);
+    const obj  = {};
+    headers.forEach((h,i) => obj[h] = vals[i] !== undefined ? vals[i] : '');
+    return obj;
+  }).filter(r => Object.values(r).some(v => v));
+}
+
+function splitCSVLine(line) {
+  const result = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
+    else { cur += ch; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+function showColumnMapper() {
+  const colOptions = ['(skip)', ...importColumns];
+  let html = '';
+  FIELDS.forEach(f => {
+    const guess = importColumns.find(c => {
+      const cn = c.toLowerCase().replace(/[\s_\-]/g,'');
+      const fk = f.key.toLowerCase().replace(/[\s_\-]/g,'');
+      return cn === fk || cn.includes(fk) || fk.includes(cn.substring(0, Math.min(5,cn.length)));
+    }) || '(skip)';
+    html += `<div class="col-map-row">
+      <div class="col-map-label">${f.label}</div>
+      <div class="col-map-arrow">→</div>
+      <select class="form-control" id="map-${f.key}">
+        ${colOptions.map(c => '<option ' + (c===guess?'selected':'') + '>' + c + '</option>').join('')}
+      </select>
+    </div>`;
+  });
+  document.getElementById('mapper-rows').innerHTML = html;
+  document.getElementById('import-mapper').style.display = 'block';
+}
+
+document.getElementById('do-import-btn').addEventListener('click', () => {
+  const barcodeCol = document.getElementById('map-barcode').value;
+  if (barcodeCol === '(skip)') { showImportAlert('You must map the Barcode column.', 'error'); return; }
+  const getCol = key => { const v = document.getElementById('map-'+key).value; return v === '(skip)' ? null : v; };
+
+  let added = 0, updated = 0;
+  importRows.forEach(row => {
+    const barcode = String(row[barcodeCol]||'').trim();
+    if (!barcode) return;
+    const incoming = { barcode };
+    FIELDS.forEach(f => {
+      if (f.key === 'barcode') return;
+      const col = getCol(f.key);
+      incoming[f.key] = col ? String(row[col]||'').trim() : '';
+    });
+    const idx = assets.findIndex(a => a.barcode === barcode);
+    if (idx !== -1) {
+      FIELDS.forEach(f => { if (f.key !== 'barcode' && incoming[f.key] && !assets[idx][f.key]) assets[idx][f.key] = incoming[f.key]; });
+      updated++;
+    } else { assets.push(incoming); added++; }
+  });
+  saveAssets();
+  document.getElementById('import-mapper').style.display = 'none';
+  importRows = []; importColumns = []; fileInput.value = '';
+  showImportAlert('✅ Import complete: ' + added + ' new assets added, ' + updated + ' existing records merged.', 'success');
+});
+
+document.getElementById('cancel-import-btn').addEventListener('click', () => {
+  document.getElementById('import-mapper').style.display = 'none';
+  importRows = []; importColumns = []; fileInput.value = '';
+});
+
+function showImportAlert(msg, type) {
+  document.getElementById('import-alert').innerHTML = '<div class="alert alert-' + type + '">' + msg + '</div>';
+}
+
+// ─── EXPORT ───────────────────────────────────────────────────────────────────
+document.getElementById('do-export-btn').addEventListener('click', () => {
+  const format     = document.getElementById('export-format').value;
+  const locationFilter = document.getElementById('export-type-filter').value.trim();
+  const dateFilter     = document.getElementById('export-date-filter').value;
+  let data = assets;
+  if (locationFilter) data = data.filter(a => (a.location||'').toLowerCase().includes(locationFilter.toLowerCase()));
+  if (dateFilter)     data = data.filter(a => (a.stockTakeDate||'') >= dateFilter);
+  if (!data.length) { alert('No assets match your filter criteria.'); return; }
+
+  const rows = data.map(a => ({
+    'Equipment Number':       a.equipmentNumber,
+    'Description':            a.description,
+    'Bar-Code Number':        a.barcode,
+    'ManufSerialNumber':      a.serialNumber,
+    'Make/Manufacturer':      a.make,
+    'Model number':           a.model,
+    'Location':               a.location,
+    'Room':                   a.room,
+    'Stock take date':        a.stockTakeDate,
+    'Last sighted date-Year': a.lastSeenYear,
+    'Last sighted date-Month':a.lastSeenMonth,
+  }));
+  const filename = 'assets_export_' + todayStr();
+  if (format === 'csv') {
+    const headers = Object.keys(rows[0]);
+    const csv = [headers.join(','), ...rows.map(r => headers.map(h => '"' + (r[h]||'').replace(/"/g,'""') + '"').join(','))].join('\n');
+    downloadBlob(new Blob([csv], {type:'text/csv'}), filename + '.csv');
+  } else {
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Assets');
+    XLSX.writeFile(wb, filename + '.xlsx');
+  }
+  showToast('⬇️ Export downloaded');
+});
+
+document.getElementById('clear-data-btn').addEventListener('click', () => {
+  if (!confirm('Delete all ' + assets.length + ' assets from this device? Export first to keep a backup.')) return;
+  assets = []; saveAssets(); renderStats(); buildTypeFilters(); renderTable();
+  showToast('🗑️ All data cleared');
+});
+
+function downloadBlob(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+// ─── MANUAL ENTRY ─────────────────────────────────────────────────────────────
+document.getElementById('manual-search-btn').addEventListener('click', () => {
+  const inp = document.getElementById('manual-barcode');
+  lookupBarcode(inp.value); inp.value = '';
+});
+document.getElementById('manual-barcode').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { lookupBarcode(e.target.value); e.target.value = ''; }
+});
+
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
+function todayStr() { return new Date().toISOString().split('T')[0]; }
+
+function esc(str) {
+  return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  Object.assign(t.style, {
+    position:'fixed', bottom:'28px', left:'50%', transform:'translateX(-50%) translateY(16px)',
+    background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text)',
+    padding:'12px 22px', borderRadius:'30px', fontSize:'14px', fontWeight:'500',
+    zIndex:'2000', opacity:'0', transition:'all 0.25s', whiteSpace:'nowrap',
+    boxShadow:'0 8px 30px rgba(0,0,0,0.5)',
+  });
+  document.body.appendChild(t);
+  requestAnimationFrame(() => { t.style.opacity='1'; t.style.transform='translateX(-50%) translateY(0)'; });
+  setTimeout(() => { t.style.opacity='0'; setTimeout(() => t.remove(), 300); }, 2800);
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+loadAssets();
+</script>
+</body>
+</html>
